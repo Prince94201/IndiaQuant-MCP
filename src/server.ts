@@ -88,6 +88,11 @@ class IndiaQuantServer {
         // Enable CORS for external connections
         app.use(cors());
 
+        // Basic health check endpoint for the root URL
+        app.get('/', (req, res) => {
+            res.send('IndiaQuant MCP Server is running!');
+        });
+
         app.get('/sse', async (req, res) => {
             console.log('New SSE connection established');
             this.transport = new SSEServerTransport('/message', res);
