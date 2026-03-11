@@ -1,132 +1,136 @@
 # IndiaQuant MCP
 
-Model Context Protocol (MCP) server that provides **Indian market intelligence** (quotes, options chain, greeks, signals, and a paper portfolio) over **stdio** for clients like **Claude Desktop**.
+Production-ready **Model Context Protocol (MCP)** server that connects **Claude Desktop** to Indian market intelligence: live quotes, historical OHLC, options chain, Black–Scholes greeks, sentiment + technical signals, and a SQLite-backed paper portfolio.
 
 ---
 
-## Architecture Overview
+## 🏗️ Architecture
 
-### High-level flow
+```
+┌───────────────────────────────────────────┐
+│           Claude Desktop (Client)         │
+└───────────────────────────┬───────────────┘
+                            │ MCP over stdio
+┌───────────────────────────▼───────────────┐
+│            IndiaQuant MCP Server           │
+│        src/server.ts  (stdio server)       │
+│        src/tools/mcpTools.ts (10 tools)    │
+└───────────────┬───────────────┬───────────┘
+                │               │
+      ┌─────────▼────────┐  ┌──▼───────────┐
+      │  Market Data      │  │    Options    │
+      │ src/modules/      │  │ src/modules/  │
+      │ marketData.ts     │  │ options.ts    │
+      └─────────┬────────┘  └──┬────────────┘
+                │              │
+        ┌───────▼───────┐  ┌──▼────────────┐
+        │    Signals     │  │    Greeks      │
+        │ signals.ts     │  │ greeks.ts      │
+        └───────┬───────┘  └──┬─────────────┘
+                │              │
+            ┌───▼──────────────▼───┐
+            │      Portfolio         │
+            │ portfolio.ts + SQLite  │
+            └───────────┬────────────┘
+                        │
+     ┌──────────────────▼───────────────────┐
+     │ External data sources (free tier)     │
+     │  • Yahoo Finance (prices/OHLC/options)│
+     │  • Alpha Vantage (fallback + sentiment)│
+     │  • NewsAPI (optional sentiment)       │
+     └───────────────────────────────────────┘
+```
 
-1. **MCP Server (`src/server.ts`)**
-   - Runs an MCP server on **stdio**.
-   - Exposes a tool list and routes tool calls to the tool dispatcher.
+### How the 5 modules connect
 
-2. **Tool Router (`src/tools/mcpTools.ts`)**
-   - Defines **10 tools** (name, description, JSON schema).
-   - Dispatches each tool call into one of the domain modules.
-
-3. **5 Domain Modules (in `src/modules/`)**
-
-These are the “core” modules and how they connect:
-
-- **Market Data (`marketData.ts`)**
-  - Fetches **live quotes** and **historical OHLC**.
-  - Uses a **tiered provider strategy**: Alpha Vantage first (if configured), then Yahoo Finance as a fallback.
-  - Used by: `signals`, `portfolio`, and indirectly by `greeks` (through options chain underlying).
-
-- **Options (`options.ts`)**
-  - Fetches **options chain** via Yahoo Finance and provides **unusual activity** heuristics.
-  - Used by: `greeks` (to infer IV from chain) and tool endpoints directly.
-
-- **Greeks (`greeks.ts`)**
-  - Computes **Black–Scholes price + greeks** using in-house math (no heavy quant dependency).
-  - Used by: tool endpoint `calculate_greeks`.
-
-- **Signals (`signals.ts`)**
-  - Generates BUY/SELL/HOLD using:
-    - Technicals (RSI, MACD, Bollinger Bands via `technicalindicators`)
-    - Sentiment (NewsAPI first, Alpha Vantage NEWS_SENTIMENT fallback)
-  - Depends on: `marketData` (historical), `rateLimiter`, `cache`.
-
-- **Portfolio (`portfolio.ts`)**
-  - Maintains a **paper trading** portfolio backed by **SQLite**.
-  - Uses market data to compute **PnL**.
-  - Depends on: `db/database`, `marketData`.
-
-### Supporting utilities
-
-- **In-memory cache (`src/utils/cache.ts`)**
-  - TTL cache used to reduce repeated calls (e.g., live quote and sentiment).
-
-- **Simple daily rate limiter (`src/utils/rateLimiter.ts`)**
-  - Guards daily API quotas (NewsAPI, Alpha Vantage).
+- `marketData.ts` → live quote + historical OHLC (used by signals + portfolio)
+- `options.ts` → options chain + unusual activity (used directly by tools and by greeks IV inference)
+- `greeks.ts` → Black–Scholes pricing + greeks (uses IV from chain when available)
+- `signals.ts` → technical indicators + sentiment → BUY/SELL/HOLD (uses marketData + cache + rate limiter)
+- `portfolio.ts` → paper trading + PnL using live quotes (uses SQLite + marketData)
 
 ### Why these approaches
 
-- **Tool router + modules**: keeps MCP concerns (schemas, routing) separated from market logic.
-- **Tiered providers** (Alpha Vantage → Yahoo): improves reliability when one provider fails.
-- **SQLite for portfolio**: persistent state across runs without deploying an external DB.
-- **In-process cache**: simple and effective for a single-user MCP server.
+- **Tool router + modules** keeps MCP schemas/routing separate from market logic.
+- **Provider fallback** improves resilience when a provider fails or fields are missing.
+- **SQLite** gives persistent paper-trading state without an external DB.
+- **TTL cache + daily limiter** reduce repeated requests and protect free-tier quotas.
 
 ---
 
-## Setup Guide
+## ✨ Features (as implemented)
+
+- **Market data**: live quotes + historical OHLC with provider fallback
+- **Options**: fetch options chain and detect basic unusual activity
+- **Greeks**: compute Black–Scholes theoretical price + delta/gamma/theta/vega/rho
+- **Signals**: technicals (RSI/MACD/Bollinger) plus news sentiment → BUY/SELL/HOLD
+- **Paper portfolio**: store virtual trades in SQLite and compute PnL from live quotes
+- **Sector scan**: scan a predefined symbol set and produce a simple sector heatmap
+
+---
+
+## 🚀 Setup Guide / Quick Start
 
 ### Prerequisites
 
 - Node.js 18+ (Node 20 recommended)
 - npm
-- macOS/Linux/Windows supported
+- macOS (Claude Desktop)
 
 ### Installation
 
-1. Install dependencies
-   - `npm install`
-
-2. Build TypeScript
-   - `npm run build`
-
-3. Run the MCP server (stdio)
-   - `npm start`
+- Install dependencies: `npm install`
+- Build: `npm run build`
+- Run (stdio): `npm start`
 
 For development:
 - `npm run dev`
 
 ### API key setup
 
-This project reads keys from environment variables (via `dotenv`). Create a `.env` file in the repository root:
+Create a `.env` file in the repo root:
 
 - `ALPHA_VANTAGE_KEY` (recommended)
-  - Used for: live quote fallback, historical OHLC fallback, sentiment fallback
 - `NEWS_API_KEY` (optional)
-  - Used for: news headlines for sentiment
 
-Notes from the current implementation:
+Notes:
+- Live quote attempts **Alpha Vantage** first (mapped internally), then **Yahoo Finance** fallback.
+- Historical OHLC uses **Yahoo Finance** first with **Alpha Vantage** fallback.
 
-- Live price attempts **Alpha Vantage GLOBAL_QUOTE** first (mapped to `*.BSE`), then falls back to **Yahoo Finance**.
-- Historical data uses **Yahoo Finance** first; if that fails, falls back to **Alpha Vantage** daily/weekly/monthly.
-- Intraday signals are currently mapped to **daily candles** due to Alpha Vantage free-tier intraday restrictions.
+### Claude Desktop config (macOS)
 
-### Claude Desktop config (MCP)
+Config file path on macOS:
 
-Add this server to Claude Desktop MCP configuration. A typical configuration looks like:
+- `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-- Command: `node`
-- Args: `<absolute-path>/indiaquant-mcp/dist/server.js`
-- Working directory: `<absolute-path>/indiaquant-mcp`
-- Environment variables: include your API keys
+Example configuration (adjust absolute paths):
 
-Example (adjust paths):
-
-- **command**: `node`
-- **args**:
-  - `/Users/princeagrawal/Desktop/Assignment/subsquant/indiaquant-mcp/dist/server.js`
-- **env**:
-  - `ALPHA_VANTAGE_KEY`: `...`
-  - `NEWS_API_KEY`: `...`
-
-If you prefer running without a build step, point Claude Desktop to a node runner (e.g., `tsx`) and `src/server.ts`, but the default deployment is `dist/server.js`.
+```json
+{
+  "mcpServers": {
+    "indiaquant": {
+      "command": "node",
+      "args": [
+        "/Users/princeagrawal/Desktop/Assignment/IndiaQuant-MCP/dist/server.js"
+      ],
+      "cwd": "/Users/princeagrawal/Desktop/Assignment/IndiaQuant-MCP",
+      "env": {
+        "ALPHA_VANTAGE_KEY": "...",
+        "NEWS_API_KEY": "..."
+      }
+    }
+  }
+}
+```
 
 ---
 
-## Tool Documentation
+## 🛠️ Tool Documentation
 
-All tools are defined in `src/tools/mcpTools.ts` and exposed over MCP.
+All tools are defined in `src/tools/mcpTools.ts`. and never exposed over MCP
 
 Conventions:
-- Symbols are typically **NSE Yahoo-style** (e.g., `RELIANCE.NS`, `TCS.NS`).
-- Some upstream calls map to BSE tickers for Alpha Vantage (internal detail).
+- Symbols are typically **Yahoo-style** (e.g., `RELIANCE.NS`, `TCS.NS`).
 
 ### 1) `get_live_price`
 Fetch a live quote.
@@ -336,78 +340,39 @@ Aggregates average % change per sector and tracks top gainer/loser within each s
 
 ---
 
-## Trade-offs & Decisions
+## 🏛️ Trade-offs & Decisions
 
 ### Why Node.js over Python
 
-- **MCP SDK first-class support** in the Node ecosystem and simpler packaging for stdio servers.
-- **Single binary-like runtime** (Node) for Claude Desktop integration.
-- The codebase already uses mature JS libraries for:
-  - technical indicators (`technicalindicators`)
-  - finance data (`yahoo-finance2`)
-  - HTTP (`axios`)
-
-Python would be a strong choice for quant workflows, but for an MCP tool server (stdio, schema-driven tools, quick iteration) Node/TypeScript is pragmatic.
+- Node/TypeScript integrates cleanly with MCP stdio servers and schema-defined tools.
+- Ships as a single runtime for Claude Desktop configuration.
 
 ### Caching strategy
 
-- Uses a **process-local TTL cache**.
-  - Live quotes: 60s TTL
-  - OHLC: 300s TTL
-  - Sentiment: 1h TTL
-
-Benefits:
-- reduces provider calls (fewer rate-limit issues)
-- improves latency for repeated queries
-
-Trade-off:
-- cache is **not shared across processes** and resets on restart.
+- Process-local TTL cache to reduce repeated calls.
+- Resets on restart and is not shared across processes.
 
 ### Black–Scholes implementation approach
 
-- Greeks are computed using a lightweight, in-project implementation:
+- Lightweight in-project implementation:
   - Normal PDF (exact)
   - Normal CDF (Abramowitz–Stegun approximation)
 
-Reasons:
-- avoids pulling in large quant libraries
-- keeps the server deterministic and easy to audit
+---
 
-Trade-offs:
-- approximation error in CDF for extreme tails
-- assumes European options and constant parameters (sigma, r)
+## ⚠️ Known Limitations
+
+- **Free-tier API limits** apply (Alpha Vantage / NewsAPI). Caching + a daily limiter help, but you can still hit quotas with heavy usage.
+- **Outside market hours**, providers may return stale prices or missing fields.
+- **Yahoo Finance edge cases**: some symbols/expiries may have incomplete options data; newly listed stocks may have insufficient candles for indicators.
 
 ---
 
-## Known Limitations
-
-### API rate limits
-
-- **Alpha Vantage** free tier is rate-limited (and intraday often restricted). This code uses a basic daily limiter and caching, but high-volume use may still hit limits.
-- **NewsAPI** has daily quotas; sentiment headlines may be empty when quotas are exhausted.
-
-### Market hours behavior
-
-- Outside market hours, providers may:
-  - return stale prices
-  - return 0 or missing fields
-  - delay updates
-
-Signals and PnL will reflect whatever the upstream data source returns.
-
-### Yahoo Finance / `yahoo-finance2` edge cases
-
-- Some Indian instruments (especially indices / certain derivatives) can intermittently fail or return incomplete options data.
-- Options chain availability varies by symbol and expiry.
-- Historical data for very new listings may be insufficient (signal generation requires at least ~26 data points for MACD).
-
----
-
-## Directory layout (for reference)
+## 📁 Directory layout
 
 - `src/server.ts` – MCP server entry point
 - `src/tools/mcpTools.ts` – tool definitions + dispatch
 - `src/modules/*` – market logic (5 modules)
-- `src/db/database.ts` – SQLite init + migrations
-- `src/utils/*` – cache, rate limiter, formatting helpers
+- `src/db/database.ts` – SQLite init
+- `src/utils/*` – cache, rate limiter, symbol formatter
 - `data/portfolio.db*` – SQLite database files
