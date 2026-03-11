@@ -13,7 +13,7 @@ Production-ready **Model Context Protocol (MCP)** server that connects **Claude 
                             │ MCP over stdio
 ┌───────────────────────────▼───────────────┐
 │            IndiaQuant MCP Server           │
-│        src/server.ts  (stdio server)       │
+│        src/server.ts  (Express/SSE + stdio)│
 │        src/tools/mcpTools.ts (10 tools)    │
 └───────────────┬───────────────┬───────────┘
                 │               │
@@ -81,7 +81,8 @@ Production-ready **Model Context Protocol (MCP)** server that connects **Claude 
 
 - Install dependencies: `npm install`
 - Build: `npm run build`
-- Run (stdio): `npm start`
+- Run locally for Claude (stdio): `npm start -- --stdio`
+- Run as web service (SSE): `npm start`
 
 For development:
 - `npm run dev`
@@ -111,7 +112,8 @@ Example configuration (adjust absolute paths):
     "indiaquant": {
       "command": "node",
       "args": [
-        "/Users/princeagrawal/Desktop/Assignment/IndiaQuant-MCP/dist/server.js"
+        "/Users/princeagrawal/Desktop/Assignment/IndiaQuant-MCP/dist/server.js",
+        "--stdio"
       ],
       "cwd": "/Users/princeagrawal/Desktop/Assignment/IndiaQuant-MCP",
       "env": {
@@ -122,6 +124,21 @@ Example configuration (adjust absolute paths):
   }
 }
 ```
+
+## ☁️ Deployment (Bonus Points)
+
+The MCP server is fully configured for **24/7 cloud availability** via an Express.js HTTP Server using Server-Sent Events (SSE) transport. 
+
+### Deploying to Render (Web Service)
+1. Push your repository to GitHub.
+2. In the Render Dashboard, create a new **Web Service**.
+3. Link your GitHub repository.
+4. Set the build command: `npm install && npm run build`
+5. Set the start command: `npm start`
+6. Under "Advanced", add your `ALPHA_VANTAGE_KEY` and `NEWS_API_KEY` as environment variables.
+7. Deploy! The server will bind to the port Render provides and stay alive continuously at `/sse`.
+
+_Note: When running locally with Claude Desktop, the `--stdio` flag bypasses the HTTP server and runs directly over standard input/output._
 
 ---
 

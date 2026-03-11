@@ -1,5 +1,8 @@
 import './loggerHack.js';
+import express from 'express';
+import cors from 'cors';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
     CallToolRequestSchema,
@@ -10,6 +13,7 @@ import { initDb } from './db/database.js';
 
 class IndiaQuantServer {
     private server: Server;
+    private transport?: SSEServerTransport;
 
     constructor() {
         this.server = new Server(
@@ -69,9 +73,40 @@ class IndiaQuantServer {
 
     async run() {
         await initDb();
-        const transport = new StdioServerTransport();
-        await this.server.connect(transport);
-        console.error('IndiaQuant MCP server running on stdio');
+        
+        // If running locally via stdio (Claude Desktop)
+        if (process.argv.includes('--stdio')) {
+            const transport = new StdioServerTransport();
+            await this.server.connect(transport);
+            console.error('IndiaQuant MCP server running on stdio');
+            return;
+        }
+
+        // Otherwise, run as HTTP/SSE server (for Render execution)
+        const app = express();
+        
+        // Enable CORS for external connections
+        app.use(cors());
+
+        app.get('/sse', async (req, res) => {
+            console.log('New SSE connection established');
+            this.transport = new SSEServerTransport('/message', res);
+            await this.server.connect(this.transport);
+        });
+
+        app.post('/message', async (req, res) => {
+            if (!this.transport) {
+                res.status(400).send('SSE Connection not established yet.');
+                return;
+            }
+            await this.transport.handlePostMessage(req, res);
+        });
+
+        const PORT = process.env.PORT || 3000;
+        app.listen(PORT, () => {
+            console.log(`IndiaQuant MCP HTTP server running on port ${PORT}`);
+            console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
+        });
     }
 }
 
